@@ -1,0 +1,54 @@
+Alizadehsani, R., Roshanzamir, M., Hussain, S. et al. Handling of uncertainty in medical data using machine learning and probability theory techniques: a review of 30 years (1991–2020). Ann Oper Res 339, 1077–1118 (2024). https://doi.org/10.1007/s10479-021-04006-2
+
+Barbieri, Sebastiano, et al. “Benchmarking Deep Learning Architectures for Predicting Readmission to the ICU and Describing Patients-at-Risk.” Scientific Reports, vol. 10, no. 1, Jan. 2020. Crossref, https://doi.org/10.1038/s41598-020-58053-z.
+
+Broadbent, A., and T. Grote. 2022. “Can Robots Do Epidemiology? Machine Learning, Causal Inference, and Predicting the Outcomes of Public Health Interventions.” Philosophy and Technology 35: 1–22.
+
+Cavique L. Implications of causality in artificial intelligence. Front Artif Intell. 2024 Aug 21;7:1439702. doi: 10.3389/frai.2024.1439702. PMID: 39233891; PMCID: PMC11371780.
+
+Georgios Karamitros, Michael P. Grant, Gregory A. Lamaris, Associations in Medical Research Can Be Misleading: A Clinician's Guide to Causal Inference,  Journal of Surgical Research, Volume 310, 2025, Pages 145-154, ISSN 0022-4804, https://doi.org/10.1016/j.jss.2025.03.043.
+
+Gholipour M, Dadashzadeh A, Jabarzadeh F, Sarbakhsh P. Challenges of Clinical Decision-making in Emergency Nursing: An Integrative Review . Open Nurs J, 2025; 19: e18744346378311. http://dx.doi.org/10.2174/0118744346378311250320070725
+
+Höfler, M. Causal inference based on counterfactuals. BMC Med Res Methodol 5, 28 (2005). https://doi.org/10.1186/1471-2288-5-28
+
+Hüllermeier, E., Waegeman, W. Aleatoric and epistemic uncertainty in machine learning: an introduction to concepts and methods. Mach Learn 110, 457–506 (2021). https://doi.org/10.1007/s10994-021-05946-3
+
+Hyndman, R.J., & Athanasopoulos, G. (2018) Forecasting: principles and practice, 2nd edition, OTexts: Melbourne, Australia. OTexts.com/fpp2.
+
+Kania, L., & Wit, E. (2022). Causal Regularization: On the trade-off between in-sample risk and out-of-sample risk guarantees. Retrieved July 11, 2025, from arXiv.org website: https://arxiv.org/abs/2205.01593
+
+Kwon, Joon‐Myoung, et al. “Deep Learning–Based Algorithm for Detecting Aortic Stenosis Using Electrocardiography.” Journal of the American Heart Association, vol. 9, no. 7, 9 Apr. 2020, https://doi.org/10.1161/jaha.119.014717.
+
+Kyono, T., Zhang, Y., & van. (2020). CASTLE: Regularization via Auxiliary Causal Graph Discovery. Retrieved July 11, 2025, from arXiv.org website: https://arxiv.org/abs/2009.13180#
+
+Md. Tanzib Hosain, Jamin Rahman Jim, M.F. Mridha, Md Mohsin Kabir (2024), Explainable AI approaches in deep learning: Advancements, applications and challenges, Computers and Electrical Engineering, Volume 117, 109246, ISSN 0045-7906, https://doi.org/10.1016/j.compeleceng.2024.109246.
+
+Mengxuan Sun, Xuebing Yang, Jinghao Niu, Yifan Gu, Chutong Wang, Wensheng Zhang, A cross-modal clinical prediction system for intensive care unit patient outcome, Knowledge-Based Systems, Volume 283, 2024, 111160, ISSN 0950-7051, https://doi.org/10.1016/j.knosys.2023.111160.
+
+Molnar, C., G. Casalicchio, and B. Bischl. 2020. “Interpretable Machine Learning—A Brief History, State-Of-The-Art and Challenges.” In Joint European Conference on Machine Learning and Knowledge Discovery in Databases, 417–431. Springer.
+
+Naser, M. 2021. “An Engineer's Guide to Explainable Artificial Intelligence and Interpretable Machine Learning: Navigating Causality, Forced Goodness, and the False Perception of Inference.” Automation in Construction 129: 103821. https://doi.org/10.1016/j. autcon.2021.103821.
+
+Nogueira, A. R., Pugnana, A., Ruggieri, S., Pedreschi, D., & Gama, J. (2022). Methods and tools for causal discovery and causal inference. Wiley Interdisciplinary Reviews: Data Mining and Knowledge Discovery, 12(2), e1449. https://doi.org/10.1002/widm.1449
+
+Pearl, J. 2019. “The Seven Tools of Causal Inference, With Reflections on Machine Learning.” Communications of the ACM 62: 54–60.
+
+Polzer, I., Schwahn, C., Völzke, H. et al. The association of tooth loss with all-cause and circulatory mortality. Is there a benefit of replaced teeth? A systematic review and meta-analysis. Clin Oral Invest 16, 333–351 (2012). https://doi.org/10.1007/s00784-011-0625-9
+
+Rahman A, Debnath T, Kundu D, Khan MSI, Aishi AA, Sazzad S, Sayduzzaman M, Band SS. Machine learning and deep learning-based approach in smart healthcare: Recent advances, applications, challenges and opportunities. AIMS Public Health. 2024 Jan 5;11(1):58-109. doi: 10.3934/publichealth.2024004. PMID: 38617415; PMCID: PMC11007421.
+
+Schuler, K., Jung, IC., Zerlik, M. et al. Context factors in clinical decision-making: a scoping review. BMC Med Inform Decis Mak 25, 133 (2025). https://doi.org/10.1186/s12911-025-02965-1
+
+Theodore H. Tulchinsky, Elena A. Varavikova, (2014) Chapter 3 - Measuring, Monitoring, and Evaluating the Health of a Population, Editor(s): Theodore H. Tulchinsky, Elena A. Varavikova, The New Public Health (Third Edition), Academic Press, Pages 91-147, ISBN 9780124157668, https://doi.org/10.1016/B978-0-12-415766-8.00003-3.
+
+Wang SY, Pershing S, Lee AY; AAO Taskforce on AI and AAO Medical Information Technology Committee. Big data requirements for artificial intelligence. Curr Opin Ophthalmol. 2020 Sep;31(5):318-323. doi: 10.1097/ICU.0000000000000676. PMID: 32657996; PMCID: PMC8164167.
+
+https://de.mathworks.com/campaigns/pocket-guides/practical-guide-to-deep-learning/pattern-recognition.html
+
+https://plato.stanford.edu/entries/aristotle-causality/#FourCaus
+
+https://www.dagitty.net/dags.html#
+
+https://www.stack-ai.com/articles/how-does-ai-recognize-patterns-and-make-predictions
+
