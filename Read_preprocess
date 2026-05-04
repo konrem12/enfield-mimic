@@ -94,7 +94,10 @@ ingredientevents = read_with_dask(path_no_zip, "icu/ingredientevents.csv.gz")
 chartevents = read_with_dask(path_no_zip, "icu/chartevents.csv.gz")
 ## etc... ##
 
-## PREPROCESSING based on specific rules ##
+###########################################
+## DATA CLEANING based on specific rules ##
+###########################################
+
 icustays = icustays.compute() if hasattr(icustays, 'compute') else icustays
 admissions = admissions.compute() if hasattr(admissions, 'compute') else admissions
 patients = patients.compute() if hasattr(patients, 'compute') else patients
@@ -202,3 +205,210 @@ critical_cols = ['gender', 'age', 'race', 'los', 'primary_disease']
 cohort = cohort.dropna(subset=critical_cols).copy()
 print(f"Μετά τον καθαρισμό Missing Values (Data Integrity): {len(cohort)} ασθενείς")
 
+# 7. Integrate the medications 
+target_hadm_ids = set(cohort['hadm_id'].unique())
+emar_path = '....'
+emar_mapping_list = []
+
+# Using a small chunk size to ensure stability in Linux environment
+for chunk in pd.read_csv(emar_path, chunksize=500000, usecols=['hadm_id', 'emar_id'], compression='gzip'):
+    # Keep only the rows belonging to our patients
+    filtered = chunk[chunk['hadm_id'].isin(target_hadm_ids)]
+    if not filtered.empty:
+        emar_mapping_list.append(filtered.drop_duplicates('hadm_id'))
+    del chunk
+    gc.collect()
+
+mapping_df = pd.concat(emar_mapping_list).drop_duplicates('hadm_id')
+target_emar_ids = set(mapping_df['emar_id'].unique())
+
+del emar_mapping_list
+gc.collect()
+
+detail_path = '/home/kremoundou/Documents/mimic-iv-3.1/hosp/emar_detail.csv.gz'
+medication_list = []
+
+for chunk in pd.read_csv(detail_path, chunksize=400000, usecols=['emar_id', 'product_description'], compression='gzip'):
+    filtered = chunk[chunk['emar_id'].isin(target_emar_ids)]
+    if not filtered.empty:
+        medication_list.append(filtered.drop_duplicates('emar_id'))
+    
+    del chunk
+    gc.collect()
+
+med_desc_df = pd.concat(medication_list).drop_duplicates('emar_id')
+del medication_list
+gc.collect(
+med_final_lookup = mapping_df.merge(med_desc_df, on='emar_id', how='inner')
+
+cohort = cohort.merge(med_final_lookup[['hadm_id', 'product_description']], on='hadm_id', how='left')
+cohort = cohort.rename(columns={'product_description': 'medication'})
+cohort['medication'] = cohort['medication'].fillna('No_Medication_Recorded')
+
+target_hadm_ids = set(cohort['hadm_id'].unique())
+
+# 2. Clinical Dictionary: Map the specific MIMIC-IV ItemIDs to readable lab names
+# 50912: Creatinine | 51006: BUN | 51301: WBC | 51222: Hemoglobin | 50971: Potassium
+vital_labs_dict = {
+    50912: 'lab_Creatinine',
+    51006: 'lab_BUN',
+    51301: 'lab_WBC',
+    51222: 'lab_Hemoglobin',
+    50971: 'lab_Potassium'
+}
+target_itemids = set(vital_labs_dict.keys())
+
+# 8. Integrate the specific Lab events
+labs_path = '...'
+lab_chunks = []
+
+for i, chunk in enumerate(pd.read_csv(labs_path, chunksize=1000000, usecols=['hadm_id', 'itemid', 'valuenum', 'charttime'], compression='gzip')):
+    chunk_filtered = chunk[chunk['hadm_id'].isin(target_hadm_ids)]
+    chunk_filtered = chunk_filtered[chunk_filtered['itemid'].isin(target_itemids)]
+    chunk_filtered = chunk_filtered.dropna(subset=['valuenum', 'charttime'])
+    if not chunk_filtered.empty:
+        lab_chunks.append(chunk_filtered)  
+    del chunk
+    del chunk_filtered
+    gc.collect() # Force RAM clearance
+
+all_labs = pd.concat(lab_chunks, ignore_index=True)
+del lab_chunks
+gc.collect()
+
+all_labs = all_labs.sort_values(by=['hadm_id', 'itemid', 'charttime'])
+last_labs = all_labs.drop_duplicates(subset=['hadm_id', 'itemid'], keep='last')
+labs_pivot = last_labs.pivot(index='hadm_id', columns='itemid', values='valuenum').reset_index()
+labs_pivot = labs_pivot.rename(columns=vital_labs_dict)
+cohort = cohort.merge(labs_pivot, on='hadm_id', how='left')
+
+# 9. Compute and Integrate the amount of Disease and Medication per patient to be merged to cohort
+
+disease_counts = diagnoses_icd.groupby('hadm_id').size().reset_index().compute()
+disease_counts.columns = ['hadm_id', 'num_diseases']
+
+med_counts = prescriptions.groupby('hadm_id')['drug'].nunique().reset_index().compute()
+med_counts.columns = ['hadm_id', 'num_medications']
+
+if 'num_diseases' in cohort.columns:
+    cohort = cohort.drop(columns=['num_diseases'])
+if 'num_medications' in cohort.columns:
+    cohort = cohort.drop(columns=['num_medications'])
+
+cohort = cohort.merge(disease_counts, on='hadm_id', how='left')
+cohort = cohort.merge(med_counts, on='hadm_id', how='left')
+
+cohort['num_diseases'] = cohort['num_diseases'].fillna(0).astype(int)
+cohort['num_medications'] = cohort['num_medications'].fillna(0).astype(int)
+
+########################
+## DATA PREPROCESSING ##
+########################
+
+print("\n" + "="*80)
+print(" DATA PREPROCESSING (WITH CLINICAL DISEASE GROUPING) ")
+print("="*80 + "\n")
+
+# 1. CLINICAL KNOWLEDGE MAPPING (DISEASES)
+
+def categorize_disease_master(title):
+    title = str(title).lower()
+    if any(w in title for w in ['infarction', 'nstemi', 'stemi', 'heart attack', 'coronary']): return 'Coronary_Disease_MI'
+    if any(w in title for w in ['heart failure', 'chf', 'cardiomyopathy', 'cor pulmonale']): return 'Heart_Failure'
+    if any(w in title for w in ['fibrillation', 'arrhythmia', 'tachycardia', 'bradycardia', 'flutter', 'block', 'sick sinus']): return 'Cardiac_Arrhythmia'
+    if any(w in title for w in ['valve', 'aortic', 'mitral', 'endocarditis', 'tricuspid']): return 'Valvular_Disease'
+    if any(w in title for w in ['aneurysm', 'dissection']): return 'Aortic_Aneurysm_Dissection'
+    if any(w in title for w in ['respiratory failure', 'ards', 'hypox', 'asphyxiation']): return 'Respiratory_Failure'
+    if any(w in title for w in ['pneumonia', 'pneumonitis', 'covid', 'influenza']): return 'Pneumonia_Infection'
+    if any(w in title for w in ['copd', 'asthma', 'emphysema', 'bronchitis']): return 'COPD_Asthma'
+    if any(w in title for w in ['pulmonary embolism', 'pe', 'cor pulmonale']): return 'Pulmonary_Embolism'
+    if any(w in title for w in ['pleurisy', 'effusion', 'pneumothorax']): return 'Pleural_Disease'
+    if any(w in title for w in ['stroke', 'cerebral infarction', 'cva', 'tia', 'ischemic attack']): return 'Stroke_TIA'
+    if any(w in title for w in ['hemorrhage', 'bleeding', 'subarachnoid']): return 'Hemorrhage' 
+    if any(w in title for w in ['seizure', 'epilepsy', 'status epilepticus', 'convulsion']): return 'Seizure_Disorder'
+    if any(w in title for w in ['encephalopathy', 'altered mental', 'delirium', 'dementia', 'alzheimer', 'parkinson', 'cognitive']): return 'Neurocognitive_Disorder'
+    if any(w in title for w in ['headache', 'migraine']): return 'Headache_Migraine'
+    if any(w in title for w in ['neuropathy', 'neuralgia', 'nerve', 'palsy', 'guillain', 'myasthenia']): return 'Neuropathy_Nerve_Disorder'
+    if any(w in title for w in ['depress', 'bipolar', 'schizo', 'anxiety', 'panic', 'psychotic', 'suicid', 'hallucination', 'conversion', 'delusion']): return 'Psychiatric_Disorder'
+    if any(w in title for w in ['abuse', 'overdose', 'intoxication', 'withdrawal', 'toxic', 'alcohol', 'opioid', 'substance']): return 'Substance_Tox'
+    if any(w in title for w in ['sepsis', 'septicemia', 'septic shock']): return 'Sepsis'
+    if any(w in title for w in ['infection', 'bacteremia', 'cellulitis', 'abscess', 'osteomyelitis']): return 'Other_Infection'
+    if any(w in title for w in ['liver', 'cirrhosis', 'hepatic']): return 'Liver_Disease'
+    if any(w in title for w in ['crohn', 'colitis', 'enteritis', 'gastroenteritis']): return 'IBD_Colitis'
+    if any(w in title for w in ['pancreatitis', 'cholecystitis', 'cholangitis', 'bile']): return 'Biliary_Pancreatic'
+    if any(w in title for w in ['esophag', 'reflux', 'ulcer', 'fistula', 'hemorrhoid', 'volvulus', 'intussusception']): return 'GI_Structural_Disorder'
+    if any(w in title for w in ['abdominal', 'nausea', 'vomiting', 'diarrhea', 'constipation', 'gastroparesis']): return 'GI_Symptom_Condition'
+    if any(w in title for w in ['renal failure', 'kidney', 'aki', 'esrd', 'nephropathy']): return 'Renal_Failure'
+    if any(w in title for w in ['diabetes', 'dka', 'ketoacidosis']): return 'Diabetes_Complications'
+    if any(w in title for w in ['obes', 'overweight']): return 'Obesity'
+    if any(w in title for w in ['hypokalemia', 'hypomagnesemia', 'hypocalcemia', 'hyponatremia', 'hyperkalemia', 'metabolic', 'acidosis', 'dehydration', 'hypovolemia']): return 'Electrolyte_Fluid_Imbalance'
+    if any(w in title for w in ['thyroid', 'goiter', 'adrenocortical', 'cushing', 'pituitary']): return 'Endocrine_Disorder'
+    if any(w in title for w in ['osteoarthritis', 'arthrosis', 'joint', 'arthritis', 'gout']): return 'Joint_Disorder_Arthritis'
+    if any(w in title for w in ['spondyl', 'stenosis', 'disc', 'back pain', 'lumbago', 'sciatica', 'radiculopathy', 'cervicalgia']): return 'Spinal_Disorder'
+    if any(w in title for w in ['bursitis', 'tendinitis', 'synovitis', 'fasciitis', 'myopathy']): return 'Soft_Tissue_Disorder'
+    if any(w in title for w in ['pregnancy', 'labor', 'abortion', 'trimester', 'fetus', 'maternal', 'postpartum', 'tubal']): return 'Obstetric_Complication'
+    if any(w in title for w in ['uter', 'endometrio', 'ovary', 'vaginal', 'pelvic']): return 'Gynecological_Disorder'
+    if any(w in title for w in ['cystitis', 'pyelonephritis', 'prostatitis', 'calculus', 'renal colic', 'urinary', 'bladder', 'hematuria']): return 'Genitourinary_Disorder'
+    if any(w in title for w in ['complication', 'postprocedural', 'prosthes', 'implant', 'catheter', 'shunt', 'graft', 'iatrogenic', 'pacemaker', 'stoma', 'fitting', 'malfunction']): return 'Medical_Device_Surgical_Complication'
+    if any(w in title for w in ['neoplasm', 'cancer', 'malignant', 'carcinoma', 'leukemia', 'lymphoma', 'myeloma', 'metastat']): return 'Malignancy'
+    if any(w in title for w in ['anemia', 'sickle', 'coagulation', 'thrombosis', 'embolism', 'hemolytic']): return 'Hematologic_Vascular_Disease'
+    if any(w in title for w in ['fracture', 'trauma', 'injury', 'wound', 'contusion', 'sprain', 'laceration', 'puncture', 'abrasion', 'crush', 'concussion']): return 'Trauma_Injury'
+    if any(w in title for w in ['pain', 'fever', 'fatigue', 'malaise', 'weakness', 'edema', 'swelling', 'dizziness', 'syncope']): return 'General_Symptom'
+    if any(w in title for w in ['poison', 'poisoning']): return 'Poisoning'
+    if any(w in title for w in ['hemangioma']): return 'Hemangioma'
+    return 'Other_Disease'
+
+cohort['primary_disease'] = cohort['primary_disease'].apply(categorize_disease_master)
+
+# 2. FEATURE SELECTION & ENCODING
+ 
+# Include the new lab columns explicitly along with the new counts
+lab_cols = list(vital_labs_dict.values())
+cols_to_keep = [
+    'subject_id', 'hadm_id', 'readmitted_30d', 'gender', 'age', 'race', 
+    'los', 'primary_disease', 'medication', 'height', 'weight', 'bmi',
+    'num_diseases', 'num_medications' # <--- Προστέθηκαν εδώ
+] + lab_cols
+
+final_dataset = cohort.reindex(columns=cols_to_keep).copy()
+
+top_15_meds = final_dataset['medication'].value_counts().nlargest(15).index
+final_dataset['medication'] = final_dataset['medication'].apply(
+    lambda x: x if x in top_15_meds else 'Other_Med'
+)
+
+final_dataset = pd.get_dummies(
+    final_dataset, 
+    columns=['gender', 'race', 'primary_disease', 'medication'], 
+    drop_first=True
+)
+
+encoded_cols = final_dataset.select_dtypes(include=['bool']).columns
+final_dataset[encoded_cols] = final_dataset[encoded_cols].astype(int)
+
+# 3. TRAIN / TEST SPLIT
+
+print("\nStep 4: Train / Test Split...")
+X = final_dataset.drop(columns=['subject_id', 'hadm_id', 'readmitted_30d'])
+y = final_dataset['readmitted_30d']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+print(f"Dataset Split: {len(X_train)} Training, {len(X_test)} Testing.")
+
+# 4. MICE IMPUTATION
+
+imputer_mice = IterativeImputer(estimator=BayesianRidge(), max_iter=30, random_state=42, imputation_order='roman')
+
+X_train_imputed = pd.DataFrame(imputer_mice.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
+X_test_imputed = pd.DataFrame(imputer_mice.transform(X_test), columns=X_test.columns, index=X_test.index)
+
+# 5. NORMALIZATION & SANITIZATION
+continuous_cols = [
+    'age', 'los', 'bmi', 'height', 'weight', 
+    'num_diseases', 'num_medications' # <--- Προστέθηκαν εδώ
+] + lab_cols
+
+scaler = StandardScaler()
+
+X_train_imputed[continuous_cols] = scaler.fit_transform(X_train_imputed[continuous_cols])
+X_test_imputed[continuous_cols] = scaler.transform(X_test_imputed[continuous_cols])
