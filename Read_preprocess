@@ -1,0 +1,204 @@
+import os
+import zipfile
+import gzip
+import pandas as pd
+import numpy as np
+import sqlite3
+import matplotlib.pyplot as plt
+import seaborn as sns
+import dask.dataframe as dd
+from scipy.stats import chi2_contingency
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+from sklearn.linear_model import BayesianRidge
+import gc
+
+def read_csv_from_zip(zip_path, gz_path_within_zip):
+    try:
+        # Open the zip file
+        with zipfile.ZipFile(zip_path, 'r') as z:
+            # Extract the .gz file to memory
+            with z.open(gz_path_within_zip) as gz_file:
+                # Open the .gz file
+                with gzip.open(gz_file, 'rt') as csv_file:
+                    # Load the CSV data into a pandas DataFrame
+                    df = pd.read_csv(csv_file, encoding='utf-16')
+                    return df
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+path_no_zip = r"/...."
+def read_with_dask(path_no_zip, relative_file_path):
+    """
+    Διαβάζει ένα .gz αρχείο χρησιμοποιώντας Dask και βελτιστοποιημένους τύπους δεδομένων.
+    """
+
+    full_path = os.path.join(path_no_zip, relative_file_path)
+    custom_dtypes = {
+        'subject_id': 'int32',
+        'hadm_id': 'float32', 
+        'itemid': 'int32',
+        'valuenum': 'float32',
+        'value': 'string', 
+        'deathtime': 'object',
+        'icd_code': 'object', 
+        'icd_version': 'object',
+        'prev_service': 'object',
+        'dose_val_rx' : 'object',
+        'form_rx' : 'object',
+        'form_val_disp' : 'object',
+        'ndc': 'object',
+        'gsn': 'object',
+        'formulary_drug_cd': 'object',
+        'poe_id': 'object',         # Συχνά περιέχει γράμματα/νούμερα
+        'pharmacy_id': 'object',     # Καλό είναι να είναι object για σιγουριά 
+        'discontinued_by_poe_id' : 'object',
+        'long_description' : 'object',
+        'expirationdate' : 'object',
+        'fill_quantity' : 'object',
+        'infusion_type' : 'object',
+        'lockout_interval' : 'object',
+        'one_hr_max' : 'object',
+        'sliding_scale' : 'object',
+        'enter_provider_id' : 'object',
+        'ab_name' : 'object',
+        'dilution_comparison' : 'object',
+        'dilution_text' : 'object',
+        'interpretation' : 'object',
+        'org_name' : 'object',
+        'quantity' : 'object'
+    }
+    try:
+        ddf = dd.read_csv(
+            full_path, 
+            compression='gzip', 
+            dtype=custom_dtypes,
+            blocksize=None,
+            assume_missing=True 
+        )
+        
+        print(f"Επιτυχής φόρτωση (Lazy): {relative_file_path}")
+        return ddf
+
+    except Exception as e:
+        print(f"Dask Error: {e}")
+        return None
+
+## From now on we read each file with the above functions ##
+## A feww examples ##
+caregiver = read_with_dask(path_no_zip, "icu/caregiver.csv.gz")
+ingredientevents = read_with_dask(path_no_zip, "icu/ingredientevents.csv.gz")
+chartevents = read_with_dask(path_no_zip, "icu/chartevents.csv.gz")
+## etc... ##
+
+## PREPROCESSING based on specific rules ##
+icustays = icustays.compute() if hasattr(icustays, 'compute') else icustays
+admissions = admissions.compute() if hasattr(admissions, 'compute') else admissions
+patients = patients.compute() if hasattr(patients, 'compute') else patients
+diagnoses = diagnoses.compute() if hasattr(diagnoses, 'compute') else diagnoses
+omr_agg = omr_agg.compute() if hasattr(omr_agg, 'compute') else omr_agg
+
+
+initial_stays = len(icustays)
+
+# 1. ICU Ward Specificity
+valid_icus = [
+    'Medical Intensive Care Unit (MICU)',
+    'Surgical Intensive Care Unit (SICU)',
+    'Medical/Surgical Intensive Care Unit (MICU/SICU)',
+    'Cardiac Vascular Intensive Care Unit (CVICU)',
+    'Coronary Care Unit (CCU)',
+    'Trauma SICU (TSICU)',
+    'Neuro Surgical Intensive Care Unit (Neuro SICU)'
+]
+icu = icustays[icustays['first_careunit'].isin(valid_icus)].copy()
+
+print(f"Μετά το φίλτρο ICU Specificity: {len(icu)} εγγραφές")
+
+icu['intime'] = pd.to_datetime(icu['intime'])
+icu['outtime'] = pd.to_datetime(icu['outtime'])
+
+icu = icu.sort_values(by=['subject_id', 'intime'])
+icu['stay_seq'] = icu.groupby('subject_id').cumcount() + 1
+
+
+# 2. 30-day Readmission specification
+
+icu['next_intime'] = icu.groupby('subject_id')['intime'].shift(-1)
+icu['days_to_next_icu'] = (icu['next_intime'] - icu['outtime']).dt.total_seconds() / (24 * 3600)
+icu['readmitted_30d'] = np.where(
+    (icu['days_to_next_icu'] > 0) & (icu['days_to_next_icu'] <= 30), 1, 0
+)
+
+cohort = icu[icu['stay_seq'] == 1].copy()
+print(f"Ασθενείς (Index Stays) μετά τον ορισμό: {len(cohort)}")
+
+adm = admissions[['hadm_id', 'admittime', 'deathtime', 'race', 'hospital_expire_flag']].copy()
+pat = patients[['subject_id', 'gender', 'anchor_age', 'anchor_year']].copy()
+
+cohort = cohort.merge(adm, on='hadm_id', how='left')
+cohort = cohort.merge(pat, on='subject_id', how='left')
+
+# MIMIC-IV Race Categorization
+def classify_race(race):
+    if pd.isna(race):
+        return 'UNKNOWN/OTHER'
+    
+    race = str(race).upper()
+    if 'WHITE' in race or 'PORTUGUESE' in race:
+        return 'WHITE'
+    elif 'BLACK' in race:
+        return 'BLACK'
+    elif 'ASIAN' in race:
+        return 'ASIAN'
+    elif 'HISPANIC' in race or 'LATINO' in race or 'SOUTH AMERICAN' in race:
+        return 'HISPANIC/LATINO'
+    else:
+        return 'UNKNOWN/OTHER'
+
+
+cohort['race'] = cohort['race'].apply(classify_race)
+
+print("--- Κατανομή Φυλής (Race) μετά την Αυστηρή Ομαδοποίηση ---")
+print(cohort['race'].value_counts())
+print("\n")
+
+# 3. BMI, weight, height (OMR)
+bmi_data = omr_agg[['subject_id','bmi']].copy()
+height_data = omr_agg[['subject_id','height']].copy()
+weight_data = omr_agg[['subject_id','weight']].copy()
+  
+cohort = cohort.merge(bmi_data, on='subject_id', how='left')
+cohort = cohort.merge(height_data, on='subject_id', how='left')
+cohort = cohort.merge(weight_data, on='subject_id', how='left')
+
+# 4. Death as a Competitive Risk
+cohort = cohort[(cohort['hospital_expire_flag'] != 1) & (cohort['deathtime'].isna())].copy()
+
+# 5. Population Demographics (Age >= 18)
+
+cohort['admittime'] = pd.to_datetime(cohort['admittime'])
+cohort['age'] = cohort['admittime'].dt.year - cohort['anchor_year'] + cohort['anchor_age']
+cohort = cohort[cohort['age'] >= 18].copy()
+print(f"Μετά το ηλικιακό φίλτρο (>= 18): {len(cohort)} ασθενείς")
+
+
+# 6. Diagnoses
+primary_diag = diagnoses[diagnoses['seq_num'] == 1][['hadm_id', 'long_title']].copy()
+
+primary_diag = primary_diag.drop_duplicates(subset=['hadm_id'], keep='first')
+
+primary_diag.rename(columns={'long_title': 'primary_disease'}, inplace=True)
+
+cohort = cohort.merge(primary_diag, on='hadm_id', how='left')
+
+
+# 6. Data Integrity and Missing Values
+critical_cols = ['gender', 'age', 'race', 'los', 'primary_disease']
+
+cohort = cohort.dropna(subset=critical_cols).copy()
+print(f"Μετά τον καθαρισμό Missing Values (Data Integrity): {len(cohort)} ασθενείς")
+
