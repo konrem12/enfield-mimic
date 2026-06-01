@@ -1,0 +1,183 @@
+### 1. Causal fused Model ###
+
+X_train_fused = X_train_imputed.copy()
+X_test_fused = X_test_imputed.copy()
+
+# Inject the personalized Causal Treatment Effect as a new Meta-Feature
+X_train_fused['Causal_Effect_LOS'] = cate_train
+X_test_fused['Causal_Effect_LOS'] = cate_test
+
+scale_weight = (y_train == 0).sum() / (y_train == 1).sum()
+
+fused_xgb = xgb.XGBClassifier(
+    n_estimators=500,               
+    learning_rate=0.01,             
+    max_depth=4,                    
+    min_child_weight=5,             
+    gamma=1,                        
+    scale_pos_weight=scale_weight,  
+    subsample=0.8,                  
+    colsample_bytree=0.8,           
+    eval_metric='auc',              
+    early_stopping_rounds=40,       
+    random_state=42,
+    n_jobs=-1                       
+)
+
+fused_xgb.fit(
+    X_train_fused, 
+    y_train,
+    eval_set=[(X_train_fused, y_train), (X_test_fused, y_test)],
+    verbose=100
+)
+
+y_prob_fused = fused_xgb.predict_proba(X_test_fused)[:, 1]
+y_pred_fused = (y_prob_fused >= 0.51).astype(int) # Using your optimal threshold
+
+print(classification_report(y_test, y_pred_fused, target_names=['No Readmission (0)', 'Readmitted (1)']))
+print(f"Fused Causal-XGBoost ROC-AUC Score: {roc_auc_score(y_test, y_prob_fused):.4f}")
+
+# Plot new Feature Importances
+importances = fused_xgb.feature_importances_
+indices = np.argsort(importances)[-15:] 
+features = X_train_fused.columns
+
+plt.figure(figsize=(10, 6))
+plt.barh(range(len(indices)), importances[indices], color='darkred', align='center')
+plt.yticks(range(len(indices)), [features[i] for i in indices])
+plt.title('Top 15 Feature Importances (Causal-XGBoost Fusion)', fontsize=14, fontweight='bold')
+plt.xlabel('Relative Importance (Gain)')
+plt.grid(axis='x', linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
+--------------------------------------------------------------------------------------------------------------------------------------
+
+### 2. Causal fused LSTM ###
+
+X_train_lstm_fused = X_train_imputed.copy()
+X_test_lstm_fused = X_test_imputed.copy()
+
+X_train_lstm_fused['Causal_Effect_LOS'] = cate_train
+X_test_lstm_fused['Causal_Effect_LOS'] = cate_test
+
+features_count = X_train_lstm_fused.shape[1]
+
+# Μετατροπή σε 3D Array για το LSTM: (Αριθμός Ασθενών, 1 Χρονικό Βήμα, Αριθμός Μεταβλητών)
+X_train_lstm_3d = np.array(X_train_lstm_fused).reshape((X_train_lstm_fused.shape[0], 1, features_count))
+X_test_lstm_3d = np.array(X_test_lstm_fused).reshape((X_test_lstm_fused.shape[0], 1, features_count))
+
+print(f"Fused LSTM Input Shape: {X_train_lstm_3d.shape} (includes Causal_Effect_LOS)")
+
+class_weights = compute_class_weight(
+    class_weight='balanced', 
+    classes=np.unique(y_train), 
+    y=y_train
+)
+weight_dict = {0: class_weights[0], 1: class_weights[1]}
+
+model = Sequential()
+
+model.add(LSTM(64, 
+    input_shape=(1, features_count), 
+    activation='tanh'
+))
+model.add(BatchNormalization())
+model.add(Dropout(0.5)) 
+
+model.add(Dense(
+    32, 
+    activation='relu'
+))
+model.add(Dropout(0.4))
+
+model.add(Dense(1, activation='sigmoid'))
+
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), 
+    loss='binary_crossentropy',
+    metrics=[tf.keras.metrics.AUC(name='auc')]
+)
+
+early_stop = EarlyStopping(monitor='val_auc', mode='max', patience=15, restore_best_weights=True, verbose=1)
+
+history = model.fit(
+    X_train_lstm_3d, 
+    y_train,
+    epochs=100,
+    batch_size=512,
+    validation_data=(X_test_lstm_3d, y_test),
+    class_weight=weight_dict,
+    callbacks=[early_stop],
+    verbose=0 # Αλλάξτε το σε 1 αν θέλετε να βλέπετε την πρόοδο ανά epoch
+)
+
+y_prob_lstm = model.predict(X_test_lstm_3d).ravel()
+y_pred_lstm = (y_prob_lstm >= 0.51).astype(int) 
+
+print(classification_report(y_test, y_pred_lstm, target_names=['No Readmission (0)', 'Readmitted (1)']))
+
+roc_auc_lstm = roc_auc_score(y_test, y_prob_lstm)
+print(f"Fused Causal-LSTM ROC-AUC Score: {roc_auc_lstm:.4f}")
+
+# VISUALIZATION
+fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+# Plot A: Learning Curve
+axes[0].plot(history.history['auc'], label='Train AUC')
+axes[0].plot(history.history['val_auc'], label='Validation AUC')
+axes[0].set_title('Causal-LSTM Learning Curve (AUC)', fontsize=14, fontweight='bold')
+axes[0].set_xlabel('Epochs')
+axes[0].set_ylabel('ROC-AUC')
+axes[0].legend()
+axes[0].grid(True, linestyle='--', alpha=0.7)
+
+# Plot B: Confusion Matrix
+cm = confusion_matrix(y_test, y_pred_lstm)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Purples', ax=axes[1], cbar=False,
+            xticklabels=['No Readmission', 'Readmitted'],
+            yticklabels=['No Readmission', 'Readmitted'])
+axes[1].set_title('Causal-LSTM Confusion Matrix', fontsize=14, fontweight='bold')
+axes[1].set_ylabel('Actual', fontsize=12)
+axes[1].set_xlabel('Predicted', fontsize=12)
+
+plt.tight_layout()
+
+Plot C: Feature extraction via Permutation
+
+current_test_set = X_test_fused 
+
+if len(current_test_set.shape) == 2:
+    X_test_reshaped = np.expand_dims(current_test_set.values, axis=1)
+else:
+    X_test_reshaped = current_test_set # Αν είναι ήδη 3D, το αφήνουμε ως έχει
+
+baseline_preds = model.predict(X_test_reshaped, verbose=0)
+baseline_auc = roc_auc_score(y_test, baseline_preds)
+
+importances = []
+cols_to_drop = [c for c in ['subject_id', 'hadm_id', 'readmitted_30d'] if c in current_test_set.columns]
+feature_names = current_test_set.drop(columns=cols_to_drop).columns if hasattr(current_test_set, 'columns') else [f"Feature_{i}" for i in range(X_test_reshaped.shape[2])]
+
+for i in range(X_test_reshaped.shape[2]): 
+    X_test_permuted = X_test_reshaped.copy()
+    
+    np.random.shuffle(X_test_permuted[:, 0, i])
+    
+    permuted_preds = model.predict(X_test_permuted, verbose=0)
+    permuted_auc = roc_auc_score(y_test, permuted_preds)
+    
+    drop_in_auc = max(0, baseline_auc - permuted_auc)
+    importances.append(drop_in_auc)
+
+importance_dict = dict(zip(feature_names, importances))
+
+top_15_lstm = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)[:15]
+features_lstm = [x[0] for x in top_15_lstm]
+scores_lstm = [x[1] for x in top_15_lstm]
+
+plt.figure(figsize=(10, 8))
+plt.barh(features_lstm[::-1], scores_lstm[::-1], color='indigo')
+plt.xlabel('Decrease in ROC-AUC Score (Permutation Importance)')
+plt.title('Top 15 Feature Importances (Causal-LSTM via Permutation)')
+plt.grid(axis='x', linestyle='--', alpha=0.7)
+plt.show()
