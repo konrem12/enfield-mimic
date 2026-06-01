@@ -1,0 +1,115 @@
+# ==========================================
+# INTERVENTION & CAUSAL DISCOVERY (FCI)
+# ==========================================
+
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+warnings.filterwarnings("ignore", module="sklearn.linear_model")
+
+fci_cols = [
+    'age', 'bmi', 'lab_Creatinine', 'lab_Potassium', 'lab_BUN', 'lab_Hemoglobin',
+       'lab_WBC', 'los', 'primary_disease', 'medication', 'readmitted_30d', 'num_diseases', 'num_medications'
+]
+
+data_for_fci = cohort[fci_cols].copy()
+
+for col in ['bmi', 'lab_Creatinine', 'lab_Creatinine', 'lab_Potassium', 'lab_BUN', 'lab_Hemoglobin',
+       'lab_WBC']:
+    data_for_fci[col] = data_for_fci[col].fillna(data_for_fci[col].median())
+
+le_disease = LabelEncoder()
+le_med = LabelEncoder()
+
+data_for_fci['primary_disease'] = le_disease.fit_transform(data_for_fci['primary_disease'].astype(str))
+data_for_fci['medication'] = le_med.fit_transform(data_for_fci['medication'].astype(str))
+
+print("Running FCI Algorithm on 10 variables (This may take 1-3 minutes)...")
+G, edges = fci(data_for_fci.values, alpha=0.05, verbose=False)
+print("FCI Completed. Causal relationships identified.")
+
+nodes = G.get_nodes()
+edges = G.get_graph_edges()
+
+label_mapping = {node.get_name(): name for node, name in zip(nodes, fci_cols)}
+
+nx_graph = nx.DiGraph()
+
+for node in nodes:
+    real_name = label_mapping[node.get_name()]
+    nx_graph.add_node(real_name)
+
+edge_colors = []
+for edge in edges:
+    node1 = label_mapping[edge.get_node1().get_name()]
+    node2 = label_mapping[edge.get_node2().get_name()]
+    end1 = edge.get_endpoint1()
+    end2 = edge.get_endpoint2()
+    
+    if end1 == Endpoint.TAIL and end2 == Endpoint.ARROW:
+        nx_graph.add_edge(node1, node2)
+        edge_colors.append('black')
+    elif end1 == Endpoint.ARROW and end2 == Endpoint.TAIL:
+        nx_graph.add_edge(node2, node1)
+        edge_colors.append('black')
+    elif end1 == Endpoint.ARROW and end2 == Endpoint.ARROW:
+        nx_graph.add_edge(node1, node2)
+        nx_graph.add_edge(node2, node1)
+        edge_colors.extend(['red', 'red']) # Latent Confounders
+    else:
+        nx_graph.add_edge(node1, node2)
+        edge_colors.append('gray') # Ambiguous
+
+# Plotting the Graph
+plt.figure(figsize=(16, 12))
+pos = nx.spring_layout(nx_graph, k=3, seed=42)
+
+nx.draw_networkx_nodes(nx_graph, pos, node_size=4500, node_color='lightcyan', edgecolors='teal', linewidths=2)
+nx.draw_networkx_labels(nx_graph, pos, font_size=10, font_weight='bold')
+
+nx.draw_networkx_edges(
+    nx_graph, pos, 
+    edge_color=edge_colors, 
+    arrowsize=20, 
+    arrowstyle='-|>',
+    connectionstyle='arc3,rad=0.15' 
+)
+
+plt.title('FCI Partial Ancestral Graph for ICU Readmission', fontsize=16, fontweight='bold')
+plt.axis('off')
+
+import matplotlib.patches as mpatches
+black_patch = mpatches.Patch(color='black', label='Direct Causal Effect (-->)')
+red_patch = mpatches.Patch(color='red', label='Latent Confounder (<->) - Hidden Variable')
+gray_patch = mpatches.Patch(color='gray', label='Ambiguous/Possible Effect (o->)')
+plt.legend(handles=[black_patch, red_patch, gray_patch], loc='upper left', fontsize=11)
+
+plt.tight_layout()
+plt.savefig('PAG_causality.png',dpi=300, bbox_inches='tight')
+plt.show()
+
+# ==========================================
+# COUNTERFACTUALS & CAUSAL FORESTS
+# ==========================================
+
+median_los = X_train_imputed['los'].median()
+T_train = (X_train_imputed['los'] > median_los).astype(int)
+T_test = (X_test_imputed['los'] > median_los).astype(int)
+
+Y_train = y_train
+Y_test = y_test
+
+X_cf_train = X_train_imputed.drop(columns=['los'])
+X_cf_test = X_test_imputed.drop(columns=['los'])
+
+causal_forest = CausalForestDML(
+    discrete_treatment=True,
+    n_estimators=500,
+    min_samples_leaf=10,
+    random_state=42
+)
+
+causal_forest.fit(Y_train, T_train, X=X_cf_train)
+
+cate_train = causal_forest.effect(X_cf_train)
+cate_test = causal_forest.effect(X_cf_test)
+
+print(f"Average Treatment Effect (ATE) on Readmission: {np.mean(cate_train):.4f}")
