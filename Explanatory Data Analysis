@@ -1,0 +1,374 @@
+import pandas
+import matplotlib
+import openpyxl
+from scipy import stats
+from scipy.stats import chi2_contingency
+from scipy.stats import mannwhitneyu, chi2_contingency
+
+# --- TARGET DISTRIBUTION --- ·
+
+total_unique_patients = cohort['subject_id'].nunique()
+readmitted_patients = cohort[cohort['readmitted_30d'] == 1]['subject_id'].nunique()
+
+readmission_rate = (readmitted_patients / total_unique_patients) * 100
+
+print(f"📊 COHORT Statistics")
+print("-" * 40)
+print(f"Total Unique patients: {total_unique_patients}")
+print(f"30-Day Readmission patients: {readmitted_patients}")
+print(f"Patients with NO Readmission: {total_unique_patients - readmitted_patients}")
+print(f"Readmission Rate (Class 1): {readmission_rate:.2f}%")
+print("-" * 40)
+
+cohort.describe()
+
+# --- 1. AGE Descriptive Stats --- #
+
+age_stats = cohort.groupby('readmitted_30d')['age'].agg(['count', 'mean', 'median', 'std']).round(2)
+print("--- Age Descriptive Statistics ---")
+print(age_stats)
+print("\n")
+
+group_0_age = cohort[cohort['readmitted_30d'] == 0]['age'].dropna()
+group_1_age = cohort[cohort['readmitted_30d'] == 1]['age'].dropna()
+
+t_stat, p_value = stats.ttest_ind(group_0_age, group_1_age, equal_var=False)
+
+print("--- Statistical Hypothesis Testing (Welch's T-Test) ---")
+print(f"T-statistic: {t_stat:.4f}")
+
+plt.figure(figsize=(8, 6))
+sns.boxplot(x='readmitted_30d', y='age', hue='readmitted_30d', data=cohort, legend=False, palette={0: "#87CEEB", 1: "#ff9999"})
+
+plt.title('Age comparison: Non-Readmission (0) vs Readmission < 30 Days (1)', fontsize=14)
+plt.xlabel('Readmission within 30 Days', fontsize=12)
+plt.ylabel('Age (Years)', fontsize=12)
+plt.xticks([0, 1], ['No (0)', 'Yes (1)'])
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+# --- Demographic Analysis of RACE vs Readmission ---#
+
+race_crosstab = pd.crosstab(cohort['race'], cohort['readmitted_30d'])
+race_pct = pd.crosstab(cohort['race'], cohort['readmitted_30d'], normalize='index') * 100
+
+race_summary = pd.DataFrame({
+    'Total_Patients': race_crosstab.sum(axis=1),
+    'No_Readmission_(n)': race_crosstab[0],
+    'Readmitted_(n)': race_crosstab[1],
+    'Readmission_Rate_(%)': race_pct[1]
+}).reset_index()
+
+race_summary = race_summary.sort_values(by='Readmission_Rate_(%)', ascending=False)
+print(race_summary.round(2).to_string(index=False))
+
+chi2_stat, p_value_chi2, dof, expected = chi2_contingency(race_crosstab)
+
+print(f"Chi2 Statistic: {chi2_stat:.4f}")
+print(f"P-value: {p_value_chi2:.4e}")
+
+race_totals = cohort.groupby('race').size()
+
+plt.figure(figsize=(14, 7)) 
+ax = sns.countplot(
+    x='race', 
+    hue='readmitted_30d', 
+    data=cohort, 
+    palette={0: "#87CEEB", 1: "#ff9999"}
+)
+plt.title('Comparison of Readmissions and Non-Readmissions by Race', fontsize=14, fontweight='bold')
+plt.xlabel('Race / Ethnicity', fontsize=12)
+plt.ylabel('Number of Patients', fontsize=12)
+plt.xticks(rotation=15)
+plt.ylim(0, cohort['race'].value_counts().max() * 1.15)
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+handles, _ = ax.get_legend_handles_labels()
+ax.legend(handles, ['No Readmission (0)', 'Readmitted (1)'], title='Status', loc='upper right')
+races_on_x_axis = [tick.get_text() for tick in ax.get_xticklabels()]
+num_races = len(races_on_x_axis)
+for i, p in enumerate(ax.patches):
+    height = p.get_height()
+    if height > 0 and height == height: 
+        current_race = races_on_x_axis[i % num_races]
+        total_for_this_race = race_totals[current_race]
+        percentage = (height / total_for_this_race) * 100
+        annotation_text = f'{int(height)}\n({percentage:.1f}%)'
+        ax.annotate(annotation_text, 
+                    (p.get_x() + p.get_width() / 2., height), 
+                    ha='center', va='bottom', 
+                    xytext=(0, 5), 
+                    textcoords='offset points',
+                    fontsize=10, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+
+# --- GENDER Demographic Statistics --- #
+
+gender_crosstab = pd.crosstab(cohort['gender'], cohort['readmitted_30d'])
+gender_pct = pd.crosstab(cohort['gender'], cohort['readmitted_30d'], normalize='index') * 100
+
+print("--- Gender Descriptive Statistics ---")
+print(gender_crosstab)
+print("\n--- Readmission Percentage per Gender (%) ---")
+print(gender_pct.round(2))
+print("\n")
+
+chi2_stat, p_val, dof, ex = chi2_contingency(gender_crosstab)
+
+print(f"Chi2 Statistic: {chi2_stat:.4f}")
+print(f"P-value: {p_val:.4e}")
+
+plt.figure(figsize=(8, 6))
+sns.countplot(
+    data=cohort, 
+    x='gender', 
+    hue='readmitted_30d', 
+    palette={0: "#87CEEB", 1: "#ff9999"}
+)
+plt.title('Gender Comparison: Non-Readmitted (0) vs Readmitted < 30 Ημέρες (1)', fontsize=14)
+plt.xlabel('Gender', fontsize=12)
+plt.ylabel('Patients', fontsize=12)
+plt.legend(title='Readmission < 30d', labels=['No (0)', 'Yes (1)'])
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+
+
+# --- Statistical analysis of BMI --- #
+
+bins = [0, 18.5, 25, 30, 35, 40, np.inf]
+labels = ['underweight', 'normalweight', 'overweight', 'obese', 'classII', 'classIII']
+
+cohort['bmi_category'] = pd.cut(
+    cohort['bmi'], 
+    bins=bins, 
+    labels=labels, 
+    right=False
+)
+
+valid_bmi_data = cohort.dropna(subset=['bmi_category']).copy()
+
+bmi_crosstab = pd.crosstab(valid_bmi_data['bmi_category'], valid_bmi_data['readmitted_30d'])
+bmi_pct = pd.crosstab(valid_bmi_data['bmi_category'], valid_bmi_data['readmitted_30d'], normalize='index') * 100
+
+
+print(bmi_crosstab)
+print(bmi_pct.round(2)) #readmission rate per bmi
+
+chi2_stat, p_val, dof, ex = chi2_contingency(bmi_crosstab)
+print(f"Chi2 Statistic: {chi2_stat:.4f}")
+print(f"P-value: {p_val:.4e}")
+
+plt.figure(figsize=(10, 6))
+bmi_pct_long = bmi_pct.reset_index().melt(
+    id_vars='bmi_category', 
+    var_name='readmitted_30d', 
+    value_name='percentage'
+)
+
+ax = sns.barplot(
+    data=bmi_pct_long, 
+    x='bmi_category', 
+    y='percentage', 
+    hue='readmitted_30d', 
+    palette={0: "#87CEEB", 1: "#ff9999"}
+)
+plt.title('BMI Categories Comparison (1st ICU Stay)', fontsize=14, fontweight='bold')
+plt.xlabel('BMI Category', fontsize=12)
+plt.ylabel('Percentage (%)', fontsize=12)
+handles, _ = ax.get_legend_handles_labels()
+plt.legend(handles=handles, title='Readmission < 30d', labels=['No (0)', 'Yes (1)'],
+           bbox_to_anchor=(1.05, 1), loc='upper left')
+
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+for p in ax.patches:
+    height = p.get_height()
+    if height > 0:
+        ax.annotate(f'{height:.1f}%', 
+                    (p.get_x() + p.get_width() / 2., height), 
+                    ha='center', va='bottom', 
+                    xytext=(0, 3), 
+                    textcoords='offset points',
+                    fontsize=10)
+plt.tight_layout()
+plt.show()
+
+# --- LOS and ICU type for Readmission --- #
+
+def q25(x): return x.quantile(0.25)
+def q75(x): return x.quantile(0.75)
+
+los_stats = cohort.groupby(['first_careunit', 'readmitted_30d'])['los'].agg(
+    Patients_Count='count',
+    Mean_LOS='mean',
+    Median_LOS='median',
+    Q1_LOS=q25,
+    Q3_LOS=q75
+).round(2).reset_index()
+
+los_stats['readmitted_30d'] = los_stats['readmitted_30d'].map(
+    {0: 'No (Single Stay)', 1: 'Yes (Readmitted)'}
+)
+
+los_stats.rename(columns={
+    'first_careunit': 'ICU Type',
+    'readmitted_30d': 'Readmission < 30d'
+}, inplace=True)
+
+print(los_stats.to_string(index=False))
+
+los_no = cohort[cohort['readmitted_30d'] == 0]['los'].dropna()
+los_yes = cohort[cohort['readmitted_30d'] == 1]['los'].dropna()
+
+stat_mw, p_value_mw = mannwhitneyu(los_yes, los_no, alternative='two-sided')
+
+print("   Test: Mann-Whitney U Test for LOS")
+print(f"   P-value: {p_value_mw:.4e}")
+
+icu_crosstab = pd.crosstab(cohort['first_careunit'], cohort['readmitted_30d'])
+chi2_stat, p_value_chi2, dof, expected = chi2_contingency(icu_crosstab)
+
+print("   Test: Chi-Square (χ²) Test of Independence for ICU type")
+print(f"   P-value: {p_value_chi2:.4e}")
+
+cohort['careunit_short'] = cohort['first_careunit'].str.extract(r'\((.*?)\)', expand=False).fillna(cohort['first_careunit'])
+
+plt.figure(figsize=(12, 7))
+ax = sns.boxplot(
+    data=cohort, 
+    x="careunit_short",  # <-- Σημαντικό: Βάζουμε τη νέα στήλη εδώ!
+    y="los", 
+    hue="readmitted_30d",
+    palette={0: "#87CEEB", 1: "#ff9999"}
+)
+
+plt.ylim(0, 17) 
+plt.xticks(rotation=0, fontsize=11) 
+plt.title("Length of Stay (LOS) Distribution by ICU Type", fontsize=14, fontweight='bold')
+plt.xlabel("ICU Type", fontsize=12)
+plt.ylabel("Length of Stay (days)", fontsize=12)
+
+handles, _ = ax.get_legend_handles_labels()
+plt.legend(
+    handles=handles, 
+    title='Readmission < 30d', 
+    labels=['No (0)', 'Yes (1)'],
+    bbox_to_anchor=(1.02, 1), 
+    loc='upper left'
+)
+
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
+
+cohort['los_days'] = (cohort['outtime'] - cohort['intime']).dt.total_seconds() / (24 * 3600)
+cohort = cohort[cohort['los_days'] > 0.1]
+
+los_stats = cohort.groupby('readmitted_30d')['los_days'].describe()[['count', 'mean', '50%', '25%', '75%']].round(2)
+los_stats.rename(columns={'50%': 'median', '25%': 'Q1', '75%': 'Q3'}, inplace=True)
+
+# --- DIAGNOSES ---#
+
+disease_stats = cohort.groupby('primary_disease').agg(
+    Total_Patients=('readmitted_30d', 'count'),
+    Readmissions=('readmitted_30d', 'sum')
+).reset_index()
+
+disease_stats['Readmission_Rate_(%)'] = (disease_stats['Readmissions'] / disease_stats['Total_Patients']) * 100
+
+disease_stats = disease_stats[disease_stats['Total_Patients'] > 50]
+
+top_20_risk_diseases = disease_stats.sort_values(by='Readmission_Rate_(%)', ascending=False).head(20)
+
+print(top_20_risk_diseases[['primary_disease', 'Total_Patients', 'Readmissions', 'Readmission_Rate_(%)']].round(2).to_string(index=False))
+
+top_20_names = top_20_risk_diseases['primary_disease'].tolist()
+filtered_cohort = cohort[cohort['primary_disease'].isin(top_20_names)]
+
+diag_crosstab = pd.crosstab(filtered_cohort['primary_disease'], filtered_cohort['readmitted_30d'])
+chi2_stat, p_value_chi2, dof, expected = chi2_contingency(diag_crosstab)
+
+print(f"Chi2 Statistic: {chi2_stat:.4f}")
+print(f"P-value: {p_value_chi2:.4e}")
+
+plt.figure(figsize=(12, 10)) # Ελαφρώς μεγαλύτερο ύψος για να χωρέσουν 20 κατηγορίες
+ax = sns.barplot(
+    data=top_20_risk_diseases, 
+    x='Readmission_Rate_(%)', 
+    y='primary_disease', 
+    palette="Reds_r"
+)
+
+plt.title('30-Day Readmission Rate by Primary Diagnosis (Top 15)', fontsize=14, fontweight='bold')
+plt.xlabel('Readmission Rate (%)', fontsize=12)
+plt.ylabel('Primary Diagnosis', fontsize=12)
+plt.grid(axis='x', linestyle='--', alpha=0.7)
+
+for p in ax.patches:
+    width = p.get_width()
+    if width > 0:
+        ax.annotate(f'{width:.1f}%', 
+                    (width, p.get_y() + p.get_height() / 2.), 
+                    ha='left', va='center', 
+                    xytext=(5, 0), 
+                    textcoords='offset points',
+                    fontsize=10)
+
+plt.tight_layout()
+plt.show()
+
+
+# --- MEDICATION --- #
+
+med_stats = cohort.groupby('medication').agg(
+    Total_Patients=('readmitted_30d', 'count'),
+    Readmissions=('readmitted_30d', 'sum')
+).reset_index()
+
+med_stats['Readmission_Rate_(%)'] = (med_stats['Readmissions'] / med_stats['Total_Patients']) * 100
+
+med_stats = med_stats[med_stats['Total_Patients'] > 50]
+
+top_20_risk_meds = med_stats.sort_values(by='Readmission_Rate_(%)', ascending=False).head(20)
+
+print("--- Top 20 Medications Based on Readmission Risk ---")
+print(top_20_risk_meds[['medication', 'Total_Patients', 'Readmissions', 'Readmission_Rate_(%)']].round(2).to_string(index=False))
+print("\n")
+
+top_20_med_names = top_20_risk_meds['medication'].tolist()
+
+filtered_med_cohort = cohort[cohort['medication'].isin(top_20_med_names)]
+
+med_crosstab = pd.crosstab(filtered_med_cohort['medication'], filtered_med_cohort['readmitted_30d'])
+chi2_stat, p_value, dof, expected = chi2_contingency(med_crosstab)
+
+print(f"Chi2 Statistic: {chi2_stat:.4f}")
+print(f"P-value: {p_value:.4e}")
+
+plt.figure(figsize=(12, 10))
+
+ax = sns.barplot(
+    data=top_20_risk_meds, 
+    x='Readmission_Rate_(%)', 
+    y='medication', 
+    palette="Purples_r"
+)
+
+plt.title('30-Day Readmission Rate by Initial Medication (Top 20)', fontsize=14, fontweight='bold')
+plt.xlabel('Readmission Rate (%)', fontsize=12)
+plt.ylabel('Medication Administered', fontsize=12)
+plt.grid(axis='x', linestyle='--', alpha=0.7)
+
+for p in ax.patches:
+    width = p.get_width()
+    if width > 0:
+        ax.annotate(f'{width:.1f}%', 
+                    (width, p.get_y() + p.get_height() / 2.), 
+                    ha='left', va='center', 
+                    xytext=(5, 0), 
+                    textcoords='offset points',
+                    fontsize=10)
+
+plt.tight_layout()
+plt.show()
