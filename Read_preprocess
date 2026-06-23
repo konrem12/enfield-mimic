@@ -94,9 +94,7 @@ ingredientevents = read_with_dask(path_no_zip, "icu/ingredientevents.csv.gz")
 chartevents = read_with_dask(path_no_zip, "icu/chartevents.csv.gz")
 ## etc... ##
 
-###########################################
 ## DATA CLEANING based on specific rules ##
-###########################################
 
 icustays = icustays.compute() if hasattr(icustays, 'compute') else icustays
 admissions = admissions.compute() if hasattr(admissions, 'compute') else admissions
@@ -202,8 +200,18 @@ cohort = cohort.merge(primary_diag, on='hadm_id', how='left')
 # 6. Data Integrity and Missing Values
 critical_cols = ['gender', 'age', 'race', 'los', 'primary_disease']
 
+prev_count = len(cohort)
+
 cohort = cohort.dropna(subset=critical_cols).copy()
-print(f"Μετά τον καθαρισμό Missing Values (Data Integrity): {len(cohort)} ασθενείς")
+
+# Step 1: Sort by the target value column in ascending order
+cohort_sort = cohort.sort_values(by='age', ascending=True)
+
+# Step 2: Drop duplicates based on the identifier, keeping the first row
+cohort_cleaned = cohort_sort.drop_duplicates(subset=['subject_id', 'hadm_id'], keep='first')
+
+# Optional Step 3: Sort by index if you need the original row order restored
+cohort = cohort_cleaned.sort_index()
 
 # 7. Integrate the medications 
 target_hadm_ids = set(cohort['hadm_id'].unique())
