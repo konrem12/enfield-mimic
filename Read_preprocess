@@ -17,13 +17,9 @@ import gc
 
 def read_csv_from_zip(zip_path, gz_path_within_zip):
     try:
-        # Open the zip file
         with zipfile.ZipFile(zip_path, 'r') as z:
-            # Extract the .gz file to memory
             with z.open(gz_path_within_zip) as gz_file:
-                # Open the .gz file
                 with gzip.open(gz_file, 'rt') as csv_file:
-                    # Load the CSV data into a pandas DataFrame
                     df = pd.read_csv(csv_file, encoding='utf-16')
                     return df
     except Exception as e:
@@ -33,7 +29,7 @@ def read_csv_from_zip(zip_path, gz_path_within_zip):
 path_no_zip = r"/...."
 def read_with_dask(path_no_zip, relative_file_path):
     """
-    Διαβάζει ένα .gz αρχείο χρησιμοποιώντας Dask και βελτιστοποιημένους τύπους δεδομένων.
+    reads a .gz file by using Dask and impoving types of data.
     """
 
     full_path = os.path.join(path_no_zip, relative_file_path)
@@ -53,8 +49,8 @@ def read_with_dask(path_no_zip, relative_file_path):
         'ndc': 'object',
         'gsn': 'object',
         'formulary_drug_cd': 'object',
-        'poe_id': 'object',         # Συχνά περιέχει γράμματα/νούμερα
-        'pharmacy_id': 'object',     # Καλό είναι να είναι object για σιγουριά 
+        'poe_id': 'object',        
+        'pharmacy_id': 'object',     
         'discontinued_by_poe_id' : 'object',
         'long_description' : 'object',
         'expirationdate' : 'object',
@@ -79,8 +75,6 @@ def read_with_dask(path_no_zip, relative_file_path):
             blocksize=None,
             assume_missing=True 
         )
-        
-        print(f"Επιτυχής φόρτωση (Lazy): {relative_file_path}")
         return ddf
 
     except Exception as e:
@@ -88,7 +82,7 @@ def read_with_dask(path_no_zip, relative_file_path):
         return None
 
 ## From now on we read each file with the above functions ##
-## A feww examples ##
+## A few examples ##
 caregiver = read_with_dask(path_no_zip, "icu/caregiver.csv.gz")
 ingredientevents = read_with_dask(path_no_zip, "icu/ingredientevents.csv.gz")
 chartevents = read_with_dask(path_no_zip, "icu/chartevents.csv.gz")
@@ -117,7 +111,7 @@ valid_icus = [
 ]
 icu = icustays[icustays['first_careunit'].isin(valid_icus)].copy()
 
-print(f"Μετά το φίλτρο ICU Specificity: {len(icu)} εγγραφές")
+print(f"After the ICU Specificity filter:" {len(icu)})
 
 icu['intime'] = pd.to_datetime(icu['intime'])
 icu['outtime'] = pd.to_datetime(icu['outtime'])
@@ -135,7 +129,7 @@ icu['readmitted_30d'] = np.where(
 )
 
 cohort = icu[icu['stay_seq'] == 1].copy()
-print(f"Ασθενείς (Index Stays) μετά τον ορισμό: {len(cohort)}")
+print(f"Patients (Index Stays) after the specified definition: {len(cohort)}")
 
 adm = admissions[['hadm_id', 'admittime', 'deathtime', 'race', 'hospital_expire_flag']].copy()
 pat = patients[['subject_id', 'gender', 'anchor_age', 'anchor_year']].copy()
@@ -163,7 +157,7 @@ def classify_race(race):
 
 cohort['race'] = cohort['race'].apply(classify_race)
 
-print("--- Κατανομή Φυλής (Race) μετά την Αυστηρή Ομαδοποίηση ---")
+print("--- Race Distribution after grouping ---")
 print(cohort['race'].value_counts())
 print("\n")
 
@@ -184,7 +178,7 @@ cohort = cohort[(cohort['hospital_expire_flag'] != 1) & (cohort['deathtime'].isn
 cohort['admittime'] = pd.to_datetime(cohort['admittime'])
 cohort['age'] = cohort['admittime'].dt.year - cohort['anchor_year'] + cohort['anchor_age']
 cohort = cohort[cohort['age'] >= 18].copy()
-print(f"Μετά το ηλικιακό φίλτρο (>= 18): {len(cohort)} ασθενείς")
+print(f"After the age filter implementation (>= 18): {len(cohort)} patients")
 
 
 # 6. Diagnoses
@@ -199,18 +193,12 @@ cohort = cohort.merge(primary_diag, on='hadm_id', how='left')
 
 # 6. Data Integrity and Missing Values
 critical_cols = ['gender', 'age', 'race', 'los', 'primary_disease']
-
 prev_count = len(cohort)
 
 cohort = cohort.dropna(subset=critical_cols).copy()
 
-# Step 1: Sort by the target value column in ascending order
 cohort_sort = cohort.sort_values(by='age', ascending=True)
-
-# Step 2: Drop duplicates based on the identifier, keeping the first row
 cohort_cleaned = cohort_sort.drop_duplicates(subset=['subject_id', 'hadm_id'], keep='first')
-
-# Optional Step 3: Sort by index if you need the original row order restored
 cohort = cohort_cleaned.sort_index()
 
 # 7. Integrate the medications 
@@ -309,9 +297,9 @@ cohort = cohort.merge(med_counts, on='hadm_id', how='left')
 cohort['num_diseases'] = cohort['num_diseases'].fillna(0).astype(int)
 cohort['num_medications'] = cohort['num_medications'].fillna(0).astype(int)
 
-########################
+
 ## DATA PREPROCESSING ##
-########################
+
 
 print("\n" + "="*80)
 print(" DATA PREPROCESSING (WITH CLINICAL DISEASE GROUPING) ")
@@ -375,7 +363,7 @@ lab_cols = list(vital_labs_dict.values())
 cols_to_keep = [
     'subject_id', 'hadm_id', 'readmitted_30d', 'gender', 'age', 'race', 
     'los', 'primary_disease', 'medication', 'height', 'weight', 'bmi',
-    'num_diseases', 'num_medications' # <--- Προστέθηκαν εδώ
+    'num_diseases', 'num_medications' 
 ] + lab_cols
 
 final_dataset = cohort.reindex(columns=cols_to_keep).copy()
@@ -413,7 +401,7 @@ X_test_imputed = pd.DataFrame(imputer_mice.transform(X_test), columns=X_test.col
 # 5. NORMALIZATION & SANITIZATION
 continuous_cols = [
     'age', 'los', 'bmi', 'height', 'weight', 
-    'num_diseases', 'num_medications' # <--- Προστέθηκαν εδώ
+    'num_diseases', 'num_medications' 
 ] + lab_cols
 
 scaler = StandardScaler()
